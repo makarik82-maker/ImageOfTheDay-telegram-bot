@@ -1,4 +1,4 @@
-import os, random, requests, logging, asyncio, tempfile
+import os, random, requests, logging, asyncio, tempfile, time
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -15,8 +15,9 @@ translator = GoogleTranslator(source='auto', target='ru')
 
 def get_nature():
     try:
-        q = random.choice(['country:Russia', 'country:Brazil', 'country:Australia', 'country:Kenya', 'genus:Corvus', 'genus:Turdus'])
-        r = requests.get(f"https://www.xeno-canto.org/api/2/recordings?query={q}&page=1", headers={'User-Agent': 'Bot/1.0'}, timeout=30)
+        # Используем корректные короткие коды стран (cnt)
+        q = random.choice(['cnt:RU', 'cnt:BR', 'cnt:AU', 'cnt:KE', 'cnt:IN', 'genus:Corvus', 'genus:Turdus'])
+        r = requests.get(f"https://www.xeno-canto.org/api/2/recordings?query={q}&page=1", headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
         r.raise_for_status()
         rec = random.choice(r.json().get('recordings', []))
         url = rec.get('file', '').replace('http://', 'https://')
@@ -73,12 +74,25 @@ def send_audio(content):
     try:
         bot = Bot(token=BOT_TOKEN)
         logger.info(f"📥 Скачивание: {content['url'][:50]}...")
-        r = requests.get(content['url'], timeout=60, headers={'User-Agent': 'Mozilla/5.0'})
-        r.raise_for_status()
+        
+        # Умный цикл повторных попыток на случай ошибки 429 (Too Many Requests)
+        for attempt in range(3):
+            r = requests.get(content['url'], timeout=60, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            if r.status_code == 429:
+                logger.warning(f"⚠️ 429 Too Many Requests. Ждем 5 секунд... (Попытка {attempt + 1})")
+                time.sleep(5)
+                continue
+            r.raise_for_status()
+            break
+        else:
+            logger.error("❌ Не удалось скачать файл после 3 попыток")
+            return False
+            
         ext = ".ogg" if "ogg" in content['url'] else ".mp3"
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as f:
             f.write(r.content)
             path = f.name
+            
         logger.info("✅ Файл скачан, отправка в Telegram...")
         with open(path, 'rb') as audio:
             asyncio.run(bot.send_audio(chat_id=CHANNEL_ID, audio=audio, caption=content['caption'], parse_mode='HTML', title=content['title'][:255]))
