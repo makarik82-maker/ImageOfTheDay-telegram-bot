@@ -29,30 +29,28 @@ translator = GoogleTranslator(source='auto', target='ru')
 
 # ==================== ЗВУКИ ПРИРОДЫ (Xeno-canto API) ====================
 def get_nature_sound():
-    """Получить случайный звук птицы со всего мира через Xeno-canto API"""
+    """Получить случайный звук птицы через Xeno-canto API"""
     try:
         logger.info("🐦 Запрос к Xeno-canto API (звуки природы)...")
         
-        # Надёжные, простые запросы, которые ВСЕГДА возвращают результат
+        # Официальные короткие коды стран и родов, которые ВСЕГДА работают
         queries = [
-            'country:"Russia"',
-            'country:"Brazil"',
-            'country:"Australia"',
-            'country:"Kenya"',
-            'country:"Indonesia"',
-            'country:"Canada"',
-            'country:"India"',
-            'country:"Madagascar"',
-            'genus:"Corvus"',      # Вороны
-            'genus:"Turdus"',      # Дрозды
-            'genus:"Sylvia"'       # Славки
+            'cnt:RU',    # Россия
+            'cnt:BR',    # Бразилия
+            'cnt:AU',    # Австралия
+            'cnt:KE',    # Кения
+            'cnt:ID',    # Индонезия
+            'cnt:CA',    # Канада
+            'cnt:IN',    # Индия
+            'cnt:MG',    # Мадагаскар
+            'genus:Corvus',  # Вороны
+            'genus:Turdus',  # Дрозды
+            'genus:Sylvia'   # Славки
         ]
         
         query = random.choice(queries)
-        # Используем только 1 или 2 страницу, чтобы избежать пустых страниц (404)
-        page = random.randint(1, 2)
-        
-        url = f"https://www.xeno-canto.org/api/2/recordings?query={query}&page={page}"
+        # Используем ТОЛЬКО страницу 1, чтобы избежать пустых страниц (404)
+        url = f"https://www.xeno-canto.org/api/2/recordings?query={query}&page=1"
         headers = {'User-Agent': 'NatureSoundsBot/1.0'}
         
         response = requests.get(url, headers=headers, timeout=30)
@@ -71,7 +69,7 @@ def get_nature_sound():
         if not audio_url:
             return None
         
-        # Делаем URL строго HTTPS
+        # Гарантируем HTTPS
         audio_url = audio_url.replace('http://', 'https://')
         
         # Информация о записи
@@ -82,7 +80,7 @@ def get_nature_sound():
         
         logger.info(f"🎵 Найдена запись: {species} ({country})")
         
-        # Формируем описание на английском для перевода
+        # Формируем описание для перевода
         description_en = (
             f"Послушайте голос вида {species}. "
             f"Эта запись была сделана в локации: {location}, {country}, "
@@ -99,7 +97,6 @@ def get_nature_sound():
             description_ru = description_en
             species_ru = species
         
-        # Формируем подпись
         caption = (
             f"🐦 <b>Звуки Земли: {species_ru}</b>\n\n"
             f"{description_ru}\n\n"
@@ -108,7 +105,6 @@ def get_nature_sound():
             f"🌐 Источник: xeno-canto.org"
         )
         
-        # Обрезаем, если длинно
         if len(caption) > 1000:
             caption = caption[:1000].rsplit(' ', 1)[0] + "..."
         
@@ -124,13 +120,13 @@ def get_nature_sound():
         return None
 
 
-# ==================== ЗВУКИ КОСМОСА (Wikimedia Commons / NASA) ====================
+# ==================== ЗВУКИ КОСМОСА (Wikimedia Commons) ====================
 def get_space_sound():
-    """Получить звук из космоса (вечные ссылки Wikimedia Commons с оригиналами NASA)"""
+    """Получить звук из космоса (вечные ссылки Wikimedia Commons)"""
     try:
         logger.info("🚀 Выбор звука из архива космических звуков...")
         
-        # ВЕЧНЫЕ ссылки на оригинальные записи NASA, размещённые на Wikimedia Commons
+        # ВЕЧНЫЕ ссылки на оригинальные записи NASA на Wikimedia Commons
         nasa_sounds = [
             {
                 'url': 'https://upload.wikimedia.org/wikipedia/commons/3/36/Perseverance_Mars_Microphone.ogg',
@@ -160,7 +156,7 @@ def get_space_sound():
             {
                 'url': 'https://upload.wikimedia.org/wikipedia/commons/9/9e/Pulsar_sound.ogg',
                 'title_en': 'Звук пульсара',
-                'description_en': 'Радиосигналы от быстро вращающейся нейтронной звезды (пульсара), преобразованные в слышимый диапазон. Это ритмичный "стук" космоса.'
+                'description_en': 'Радиосигналы от быстро вращающейся нейтронной звезды (пульсара), преобразованные в слышимый диапазон. Это ритмичный стук космоса.'
             },
             {
                 'url': 'https://upload.wikimedia.org/wikipedia/commons/0/00/Black_Hole_Perseus_Cluster.ogg',
@@ -176,7 +172,6 @@ def get_space_sound():
         
         sound = random.choice(nasa_sounds)
         
-        # Переводим
         try:
             title_ru = translator.translate(sound['title_en'])
             description_ru = translator.translate(sound['description_en'])
@@ -255,14 +250,13 @@ def send_audio_to_telegram(content):
         
         logger.info(f"📥 Отправка аудио по ссылке: {content['url'][:60]}...")
         
-        # Отправляем ПРЯМУЮ ссылку на аудио. Telegram сам его скачает и обработает.
-        # Это намного надёжнее и быстрее, чем скачивать файл в память скрипта.
+        # Отправляем ПРЯМУЮ ссылку. Telegram сам скачает и обработает файл.
         asyncio.run(bot.send_audio(
             chat_id=TELEGRAM_CHANNEL_ID,
-            audio=content['url'],  # Прямая ссылка
+            audio=content['url'],
             caption=content['caption'],
             parse_mode='HTML',
-            title=content['title'][:255]  # Лимит Telegram на название аудио
+            title=content['title'][:255]
         ))
         
         logger.info("✅ Аудио успешно отправлено в Telegram")
@@ -284,11 +278,9 @@ def main():
         logger.error("❌ Не все переменные окружения установлены")
         return False
     
-    # Определяем тип контента
     content_type = get_next_content_type()
     logger.info(f"🎯 Выбран тип: {content_type.upper()}")
     
-    # Получаем звук
     if content_type == 'nature':
         content = get_nature_sound()
     else:
@@ -296,8 +288,6 @@ def main():
     
     if not content:
         logger.warning(f"⚠️ Не удалось получить звук ({content_type}). Пробуем альтернативный тип...")
-        
-        # Если не получилось, пробуем другой тип
         alt_type = 'space' if content_type == 'nature' else 'nature'
         logger.info(f"🔄 Пробуем: {alt_type.upper()}")
         
@@ -310,7 +300,6 @@ def main():
         logger.warning("⚠️ Не удалось получить звук ни из одного источника.")
         return False
     
-    # Отправляем в Telegram
     success = send_audio_to_telegram(content)
     
     if success:
