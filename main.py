@@ -3,6 +3,7 @@ import random
 import requests
 import logging
 import asyncio
+import tempfile
 from telegram import Bot
 from telegram.error import TelegramError
 from deep_translator import GoogleTranslator
@@ -22,11 +23,13 @@ translator = GoogleTranslator(source='auto', target='ru')
 def get_nature_sound():
     try:
         logger.info("🐦 Запрос к Xeno-canto API...")
-        # Официальные короткие коды, которые ВСЕГДА работают
-        queries = ['cnt:RU', 'cnt:BR', 'cnt:AU', 'cnt:KE', 'cnt:ID', 'cnt:CA', 'cnt:IN', 'genus:Turdus', 'genus:Corvus']
+        # Используем проверенные официальные запросы
+        queries = [
+            'country:Russia', 'country:Brazil', 'country:Australia', 
+            'country:Kenya', 'country:India', 'genus:Corvus', 'genus:Turdus'
+        ]
         query = random.choice(queries)
         
-        # ТОЛЬКО страница 1, чтобы избежать 404
         url = f"https://www.xeno-canto.org/api/2/recordings?query={query}&page=1"
         headers = {'User-Agent': 'NatureSoundsBot/1.0'}
         
@@ -68,7 +71,6 @@ def get_nature_sound():
 def get_space_sound():
     try:
         logger.info("🚀 Выбор звука из архива (Wikimedia Commons)...")
-        # ВЕЧНЫЕ ссылки на оригинальные записи NASA на Wikimedia Commons
         sounds = [
             {'url': 'https://upload.wikimedia.org/wikipedia/commons/3/36/Perseverance_Mars_Microphone.ogg', 'title': 'Звуки Марса от марсохода Perseverance', 'desc': 'Реальное аудио, записанное микрофоном марсохода Perseverance. Слышен шум марсианского ветра и работа аппарата.'},
             {'url': 'https://upload.wikimedia.org/wikipedia/commons/e/e0/Jupiter_radio_emissions.ogg', 'title': 'Радиоизлучение Юпитера', 'desc': 'Мощные радиоволны Юпитера, преобразованные в звук. Запись сделана космическим аппаратом при сближении с газовым гигантом.'},
@@ -124,47 +126,4 @@ def get_next_content_type():
     except:
         return CONTENT_TYPES[0]
 
-def send_audio_to_telegram(content):
-    try:
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        logger.info(f"📥 Отправка аудио: {content['url'][:60]}...")
-        asyncio.run(bot.send_audio(
-            chat_id=TELEGRAM_CHANNEL_ID,
-            audio=content['url'],
-            caption=content['caption'],
-            parse_mode='HTML',
-            title=content['title'][:255]
-        ))
-        logger.info("✅ Аудио успешно отправлено")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка отправки: {e}")
-        return False
-
-def main():
-    logger.info("🚀 Запуск бота звуков")
-    if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID]):
-        logger.error("❌ Не все переменные окружения установлены")
-        return False
-    
-    content_type = get_next_content_type()
-    logger.info(f"🎯 Выбран тип: {content_type.upper()}")
-    
-    content = get_nature_sound() if content_type == 'nature' else get_space_sound()
-    
-    if not content:
-        alt_type = 'space' if content_type == 'nature' else 'nature'
-        logger.info(f"🔄 Пробуем альтернативу: {alt_type.upper()}")
-        content = get_nature_sound() if alt_type == 'nature' else get_space_sound()
-        
-    if not content:
-        logger.warning("⚠️ Не удалось получить звук.")
-        return False
-        
-    if send_audio_to_telegram(content):
-        set_github_variable(STATE_VAR_TYPE, content_type)
-        return True
-    return False
-
-if __name__ == '__main__':
-    exit(0 if main() else 0)
+def send_audio
