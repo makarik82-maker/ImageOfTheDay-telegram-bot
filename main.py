@@ -7,49 +7,26 @@ from telegram import Bot
 from telegram.error import TelegramError
 from deep_translator import GoogleTranslator
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Конфигурация
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPOSITORY = os.getenv('GITHUB_REPOSITORY')
 
-# Типы контента (чередуются)
 CONTENT_TYPES = ['nature', 'space']
 STATE_VAR_TYPE = "LAST_SOUND_TYPE"
-
 translator = GoogleTranslator(source='auto', target='ru')
 
-
-# ==================== ЗВУКИ ПРИРОДЫ (Xeno-canto API) ====================
 def get_nature_sound():
-    """Получить случайный звук птицы через Xeno-canto API"""
     try:
-        logger.info("🐦 Запрос к Xeno-canto API (звуки природы)...")
-        
-        # Официальные короткие коды стран и родов, которые ВСЕГДА работают
-        queries = [
-            'cnt:RU',    # Россия
-            'cnt:BR',    # Бразилия
-            'cnt:AU',    # Австралия
-            'cnt:KE',    # Кения
-            'cnt:ID',    # Индонезия
-            'cnt:CA',    # Канада
-            'cnt:IN',    # Индия
-            'cnt:MG',    # Мадагаскар
-            'genus:Corvus',  # Вороны
-            'genus:Turdus',  # Дрозды
-            'genus:Sylvia'   # Славки
-        ]
-        
+        logger.info("🐦 Запрос к Xeno-canto API...")
+        # Официальные короткие коды, которые ВСЕГДА работают
+        queries = ['cnt:RU', 'cnt:BR', 'cnt:AU', 'cnt:KE', 'cnt:ID', 'cnt:CA', 'cnt:IN', 'genus:Turdus', 'genus:Corvus']
         query = random.choice(queries)
-        # Используем ТОЛЬКО страницу 1, чтобы избежать пустых страниц (404)
+        
+        # ТОЛЬКО страница 1, чтобы избежать 404
         url = f"https://www.xeno-canto.org/api/2/recordings?query={query}&page=1"
         headers = {'User-Agent': 'NatureSoundsBot/1.0'}
         
@@ -59,198 +36,98 @@ def get_nature_sound():
         
         recordings = data.get('recordings', [])
         if not recordings:
-            logger.warning("⚠️ Xeno-canto не вернул записей, пробуем другой запрос")
             return None
         
-        # Выбираем случайную запись из полученных
         recording = random.choice(recordings)
-        
-        audio_url = recording.get('file', '')
+        audio_url = recording.get('file', '').replace('http://', 'https://')
         if not audio_url:
             return None
         
-        # Гарантируем HTTPS
-        audio_url = audio_url.replace('http://', 'https://')
-        
-        # Информация о записи
         species = recording.get('en', recording.get('species', 'Неизвестный вид'))
         location = recording.get('loc', 'Неизвестно')
         country = recording.get('country', '')
         recordist = recording.get('rec', 'Неизвестный автор')
         
-        logger.info(f"🎵 Найдена запись: {species} ({country})")
+        desc_en = f"Послушайте голос вида {species}. Запись сделана в локации: {location}, {country}, автор: {recordist}. Xeno-canto — крупнейшая открытая база данных звуков птиц."
         
-        # Формируем описание для перевода
-        description_en = (
-            f"Послушайте голос вида {species}. "
-            f"Эта запись была сделана в локации: {location}, {country}, "
-            f"автор записи: {recordist}. "
-            f"Xeno-canto — крупнейшая в мире открытая база данных звуков птиц."
-        )
-        
-        # Переводим
         try:
-            description_ru = translator.translate(description_en)
+            desc_ru = translator.translate(desc_en)
             species_ru = translator.translate(species) if len(species) > 3 else species
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка перевода: {e}")
-            description_ru = description_en
-            species_ru = species
-        
-        caption = (
-            f"🐦 <b>Звуки Земли: {species_ru}</b>\n\n"
-            f"{description_ru}\n\n"
-            f"📍 {location}, {country}\n"
-            f"🎙️ Запись: {recordist}\n"
-            f"🌐 Источник: xeno-canto.org"
-        )
-        
+        except:
+            desc_ru, species_ru = desc_en, species
+            
+        caption = f"🐦 <b>Звуки Земли: {species_ru}</b>\n\n{desc_ru}\n\n📍 {location}, {country}\n🎙️ Запись: {recordist}\n🌐 Источник: xeno-canto.org"
         if len(caption) > 1000:
             caption = caption[:1000].rsplit(' ', 1)[0] + "..."
-        
-        return {
-            'type': 'audio',
-            'url': audio_url,
-            'caption': caption,
-            'title': f"{species} - {country}"
-        }
-        
+            
+        return {'type': 'audio', 'url': audio_url, 'caption': caption, 'title': f"{species} - {country}"}
     except Exception as e:
-        logger.error(f"❌ Ошибка Xeno-canto API: {e}")
+        logger.error(f"❌ Ошибка Xeno-canto: {e}")
         return None
 
-
-# ==================== ЗВУКИ КОСМОСА (Wikimedia Commons) ====================
 def get_space_sound():
-    """Получить звук из космоса (вечные ссылки Wikimedia Commons)"""
     try:
-        logger.info("🚀 Выбор звука из архива космических звуков...")
-        
+        logger.info("🚀 Выбор звука из архива (Wikimedia Commons)...")
         # ВЕЧНЫЕ ссылки на оригинальные записи NASA на Wikimedia Commons
-        nasa_sounds = [
-            {
-                'url': 'https://upload.wikimedia.org/wikipedia/commons/3/36/Perseverance_Mars_Microphone.ogg',
-                'title_en': 'Звуки Марса от марсохода Perseverance',
-                'description_en': 'Реальное аудио, записанное микрофоном марсохода Perseverance на поверхности Марса. Слышен шум марсианского ветра и работа самого аппарата.'
-            },
-            {
-                'url': 'https://upload.wikimedia.org/wikipedia/commons/e/e0/Jupiter_radio_emissions.ogg',
-                'title_en': 'Радиоизлучение Юпитера',
-                'description_en': 'Мощные радиоволны, издаваемые Юпитером, преобразованные в звук. Эта запись была сделана космическим аппаратом при сближении с газовым гигантом.'
-            },
-            {
-                'url': 'https://upload.wikimedia.org/wikipedia/commons/2/2c/Saturn_radio_emissions.ogg',
-                'title_en': 'Радиоизлучение Сатурна',
-                'description_en': 'Загадочные радиосигналы Сатурна, записанные зондом Cassini. Они связаны с магнитным полем планеты и её знаменитыми кольцами.'
-            },
-            {
-                'url': 'https://upload.wikimedia.org/wikipedia/commons/8/87/Solar_wind.ogg',
-                'title_en': 'Звуки солнечного ветра',
-                'description_en': 'Поток заряженных частиц от Солнца. Когда эти частицы взаимодействуют с магнитным полем Земли, они создают электромагнитные колебания, преобразованные в этот звук.'
-            },
-            {
-                'url': 'https://upload.wikimedia.org/wikipedia/commons/5/5e/Earth_VLF.ogg',
-                'title_en': 'Сверхнизкочастотные звуки Земли',
-                'description_en': 'Сама Земля издаёт электромагнитные звуки в сверхнизком диапазоне. Они вызваны ударами молний и взаимодействием атмосферы с солнечным ветром.'
-            },
-            {
-                'url': 'https://upload.wikimedia.org/wikipedia/commons/9/9e/Pulsar_sound.ogg',
-                'title_en': 'Звук пульсара',
-                'description_en': 'Радиосигналы от быстро вращающейся нейтронной звезды (пульсара), преобразованные в слышимый диапазон. Это ритмичный стук космоса.'
-            },
-            {
-                'url': 'https://upload.wikimedia.org/wikipedia/commons/0/00/Black_Hole_Perseus_Cluster.ogg',
-                'title_en': 'Звуковые волны от чёрной дыры',
-                'description_en': 'В 2003 году астрономы обнаружили звуковые волны от сверхмассивной чёрной дыры в скоплении Персея. Это самая низкая нота, когда-либо обнаруженная во Вселенной.'
-            },
-            {
-                'url': 'https://upload.wikimedia.org/wikipedia/commons/9/98/Apollo_11_launch.ogg',
-                'title_en': 'Запуск Аполлон-11',
-                'description_en': 'Оригинальная аудиозапись старта ракеты Сатурн-5 с миссией Аполлон-11, которая впервые доставила людей на Луну в 1969 году.'
-            }
+        sounds = [
+            {'url': 'https://upload.wikimedia.org/wikipedia/commons/3/36/Perseverance_Mars_Microphone.ogg', 'title': 'Звуки Марса от марсохода Perseverance', 'desc': 'Реальное аудио, записанное микрофоном марсохода Perseverance. Слышен шум марсианского ветра и работа аппарата.'},
+            {'url': 'https://upload.wikimedia.org/wikipedia/commons/e/e0/Jupiter_radio_emissions.ogg', 'title': 'Радиоизлучение Юпитера', 'desc': 'Мощные радиоволны Юпитера, преобразованные в звук. Запись сделана космическим аппаратом при сближении с газовым гигантом.'},
+            {'url': 'https://upload.wikimedia.org/wikipedia/commons/2/2c/Saturn_radio_emissions.ogg', 'title': 'Радиоизлучение Сатурна', 'desc': 'Радиосигналы Сатурна, записанные зондом Cassini. Они связаны с магнитным полем планеты и её кольцами.'},
+            {'url': 'https://upload.wikimedia.org/wikipedia/commons/8/87/Solar_wind.ogg', 'title': 'Звуки солнечного ветра', 'desc': 'Поток заряженных частиц от Солнца. При взаимодействии с магнитным полем Земли они создают эти электромагнитные колебания.'},
+            {'url': 'https://upload.wikimedia.org/wikipedia/commons/5/5e/Earth_VLF.ogg', 'title': 'Сверхнизкочастотные звуки Земли', 'desc': 'Земля издаёт электромагнитные звуки в сверхнизком диапазоне, вызванные молниями и взаимодействием с солнечным ветром.'},
+            {'url': 'https://upload.wikimedia.org/wikipedia/commons/9/9e/Pulsar_sound.ogg', 'title': 'Звук пульсара', 'desc': 'Радиосигналы от быстро вращающейся нейтронной звезды, преобразованные в слышимый диапазон. Ритмичный стук космоса.'},
+            {'url': 'https://upload.wikimedia.org/wikipedia/commons/0/00/Black_Hole_Perseus_Cluster.ogg', 'title': 'Звуковые волны от чёрной дыры', 'desc': 'Звуковые волны от сверхмассивной чёрной дыры в скоплении Персея. Самая низкая нота, когда-либо обнаруженная во Вселенной.'},
+            {'url': 'https://upload.wikimedia.org/wikipedia/commons/9/98/Apollo_11_launch.ogg', 'title': 'Запуск Аполлон-11', 'desc': 'Оригинальная аудиозапись старта ракеты Сатурн-5, которая впервые доставила людей на Луну в 1969 году.'}
         ]
         
-        sound = random.choice(nasa_sounds)
-        
+        sound = random.choice(sounds)
         try:
-            title_ru = translator.translate(sound['title_en'])
-            description_ru = translator.translate(sound['description_en'])
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка перевода: {e}")
-            title_ru = sound['title_en']
-            description_ru = sound['description_en']
-        
-        caption = (
-            f"🚀 <b>Звуки Космоса: {title_ru}</b>\n\n"
-            f"{description_ru}\n\n"
-            f"🌐 Источник: NASA / Wikimedia Commons"
-        )
-        
+            title_ru = translator.translate(sound['title'])
+            desc_ru = translator.translate(sound['desc'])
+        except:
+            title_ru, desc_ru = sound['title'], sound['desc']
+            
+        caption = f"🚀 <b>Звуки Космоса: {title_ru}</b>\n\n{desc_ru}\n\n🌐 Источник: NASA / Wikimedia Commons"
         if len(caption) > 1000:
             caption = caption[:1000].rsplit(' ', 1)[0] + "..."
-        
-        return {
-            'type': 'audio',
-            'url': sound['url'],
-            'caption': caption,
-            'title': sound['title_en']
-        }
-        
+            
+        return {'type': 'audio', 'url': sound['url'], 'caption': caption, 'title': title_ru}
     except Exception as e:
         logger.error(f"❌ Ошибка получения звука космоса: {e}")
         return None
 
-
-# ==================== УПРАВЛЕНИЕ СОСТОЯНИЕМ ====================
 def get_github_variable(var_name):
-    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
-        return ""
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY: return ""
     url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables/{var_name}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json()["value"]
+        return response.json()["value"] if response.status_code == 200 else ""
+    except:
         return ""
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось получить переменную {var_name}: {e}")
-        return ""
-
 
 def set_github_variable(var_name, value):
-    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
-        return
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY: return
     url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables/{var_name}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    data = {"name": var_name, "value": value}
     try:
-        response = requests.patch(url, headers=headers, json=data, timeout=10)
+        response = requests.patch(url, headers=headers, json={"name": var_name, "value": value}, timeout=10)
         if response.status_code == 404:
-            create_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables"
-            requests.post(create_url, headers=headers, json=data, timeout=10)
-        logger.info(f"💾 Сохранено: {var_name} = {value}")
+            requests.post(f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables", headers=headers, json={"name": var_name, "value": value}, timeout=10)
     except Exception as e:
         logger.error(f"❌ Не удалось сохранить {var_name}: {e}")
-
 
 def get_next_content_type():
     last_type = get_github_variable(STATE_VAR_TYPE)
     try:
-        last_index = CONTENT_TYPES.index(last_type)
-        next_index = (last_index + 1) % len(CONTENT_TYPES)
-    except (ValueError, TypeError):
-        next_index = 0
-    return CONTENT_TYPES[next_index]
+        return CONTENT_TYPES[(CONTENT_TYPES.index(last_type) + 1) % len(CONTENT_TYPES)]
+    except:
+        return CONTENT_TYPES[0]
 
-
-# ==================== ОТПРАВКА В TELEGRAM ====================
 def send_audio_to_telegram(content):
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        
-        logger.info(f"📥 Отправка аудио по ссылке: {content['url'][:60]}...")
-        
-        # Отправляем ПРЯМУЮ ссылку. Telegram сам скачает и обработает файл.
+        logger.info(f"📥 Отправка аудио: {content['url'][:60]}...")
         asyncio.run(bot.send_audio(
             chat_id=TELEGRAM_CHANNEL_ID,
             audio=content['url'],
@@ -258,22 +135,14 @@ def send_audio_to_telegram(content):
             parse_mode='HTML',
             title=content['title'][:255]
         ))
-        
-        logger.info("✅ Аудио успешно отправлено в Telegram")
+        logger.info("✅ Аудио успешно отправлено")
         return True
-        
-    except TelegramError as e:
-        logger.error(f"❌ Ошибка Telegram: {e}")
-        return False
     except Exception as e:
-        logger.error(f"❌ Общая ошибка отправки: {e}")
+        logger.error(f"❌ Ошибка отправки: {e}")
         return False
 
-
-# ==================== ОСНОВНАЯ ФУНКЦИЯ ====================
 def main():
-    logger.info("🚀 Запуск бота звуков (Земля и Космос)")
-    
+    logger.info("🚀 Запуск бота звуков")
     if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID]):
         logger.error("❌ Не все переменные окружения установлены")
         return False
@@ -281,38 +150,21 @@ def main():
     content_type = get_next_content_type()
     logger.info(f"🎯 Выбран тип: {content_type.upper()}")
     
-    if content_type == 'nature':
-        content = get_nature_sound()
-    else:
-        content = get_space_sound()
+    content = get_nature_sound() if content_type == 'nature' else get_space_sound()
     
     if not content:
-        logger.warning(f"⚠️ Не удалось получить звук ({content_type}). Пробуем альтернативный тип...")
         alt_type = 'space' if content_type == 'nature' else 'nature'
-        logger.info(f"🔄 Пробуем: {alt_type.upper()}")
+        logger.info(f"🔄 Пробуем альтернативу: {alt_type.upper()}")
+        content = get_nature_sound() if alt_type == 'nature' else get_space_sound()
         
-        if alt_type == 'nature':
-            content = get_nature_sound()
-        else:
-            content = get_space_sound()
-    
     if not content:
-        logger.warning("⚠️ Не удалось получить звук ни из одного источника.")
+        logger.warning("⚠️ Не удалось получить звук.")
         return False
-    
-    success = send_audio_to_telegram(content)
-    
-    if success:
+        
+    if send_audio_to_telegram(content):
         set_github_variable(STATE_VAR_TYPE, content_type)
         return True
-    
     return False
 
-
 if __name__ == '__main__':
-    success = main()
-    if success:
-        exit(0)
-    else:
-        logger.warning("⚠️ Завершаем работу. Завтра попробуем снова!")
-        exit(0)
+    exit(0 if main() else 0)
