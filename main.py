@@ -9,6 +9,7 @@ from datetime import datetime
 import requests
 from deep_translator import GoogleTranslator
 from telegram import Bot
+from telegram.request import HTTPXRequest
 
 # ==============================================================================
 # НАСТРОЙКИ И ЛОГИРОВАНИЕ
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Инициализация переводчика
 translator = GoogleTranslator(source='auto', target='ru')
 
-# Переменные окружения
+# Переменные окружения (имена должны совпадать с Secrets в GitHub Actions)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
@@ -51,7 +52,7 @@ def get_unsplash_image(query):
         desc = data.get('description', '') or data.get('alt_description', '')
         photographer = data['user']['name']
         
-        # ИСПРАВЛЕНИЕ 1: Фильтрация мусорных описаний и текстов ошибок сервера
+        # Фильтрация мусорных описаний и текстов ошибок сервера
         error_keywords = ['error', '500', "that's an error", 'server error', '!!']
         if not desc or any(keyword in desc.lower() for keyword in error_keywords):
             desc_ru = f"Красивое фото: {query}"
@@ -149,13 +150,22 @@ def get_national_park_image():
         return None
 
 # ==============================================================================
-# ФУНКЦИЯ ОТПРАВКИ
+# ФУНКЦИЯ ОТПРАВКИ С УВЕЛИЧЕННЫМИ ТАЙМАУТАМИ И RETRY
 # ==============================================================================
 def send_image(content):
-    """Отправить фото в Telegram с строгой проверкой валидности файла"""
+    """Отправить фото в Telegram с увеличенным таймаутом и повторными попытками"""
     path = None
     try:
-        bot = Bot(token=BOT_TOKEN)
+        # Увеличиваем таймауты для HTTP-запросов бота
+        request = HTTPXRequest(
+            connection_pool_size=8,
+            connect_timeout=30.0,
+            read_timeout=60.0,
+            write_timeout=60.0,
+            pool_timeout=30.0
+        )
+        
+        bot = Bot(token=BOT_TOKEN, request=request)
         logger.info(f"📥 Скачивание изображения: {content['url'][:60]}...")
         
         # Скачиваем изображение с проверками
@@ -167,13 +177,13 @@ def send_image(content):
                 time.sleep(5)
                 continue
             
-            # ИСПРАВЛЕНИЕ 2: Проверка, что сервер вернул именно изображение, а не HTML-страницу ошибки
+            # Проверка, что сервер вернул именно изображение, а не HTML-страницу ошибки
             content_type = r.headers.get('Content-Type', '').lower()
             if not content_type.startswith('image/'):
                 logger.error(f"❌ По ссылке вернулся не изображение, а: {content_type}")
                 return False
             
-            # ИСПРАВЛЕНИЕ 3: Проверка размера файла (страницы ошибок HTML обычно весят < 5 КБ)
+            # Проверка размера файла (страницы ошибок обычно весят < 5 КБ)
             if len(r.content) < 5000:
                 logger.error("❌ Размер файла слишком мал (< 5 КБ), вероятно это страница ошибки сервера")
                 return False
@@ -200,16 +210,33 @@ def send_image(content):
         
         logger.info("✅ Файл скачан и проверен, отправка в Telegram...")
         
-        # Отправляем как фото (используем asyncio.run для совместимости с python-telegram-bot v20+)
-        asyncio.run(bot.send_photo(
-            chat_id=CHANNEL_ID,
-            photo=open(path, 'rb'),
-            caption=content['caption'],
-            parse_mode='HTML'
-        ))
+        # Отправка с повторными попытками
+        max_send_attempts = 3
+        for send_attempt in range(max_send_attempts):
+            try:
+                logger.info(f"🔄 Попытка отправки #{send_attempt + 1}...")
+                with open(path, 'rb') as photo:
+                    asyncio.run(bot.send_photo(
+                        chat_id=CHANNEL_ID,
+                        photo=photo,
+                        caption=content['caption'],
+                        parse_mode='HTML',
+                        read_timeout=60,
+                        write_timeout=60,
+                        connect_timeout=30,
+                        pool_timeout=30
+                    ))
+                logger.info("✅ Фото успешно отправлено!")
+                return True
+            except Exception as e:
+                logger.warning(f"⚠️ Попытка #{send_attempt + 1} не удалась: {e}")
+                if send_attempt < max_send_attempts - 1:
+                    wait_time = 5 * (send_attempt + 1)
+                    logger.info(f"⏳ Ждем {wait_time} секунд перед следующей попыткой...")
+                    time.sleep(wait_time)
         
-        logger.info("✅ Фото успешно отправлено!")
-        return True
+        logger.error("❌ Не удалось отправить фото после всех попыток")
+        return False
         
     except Exception as e:
         logger.error(f"❌ Ошибка отправки: {e}")
@@ -240,7 +267,7 @@ def main():
     logger.info("🚀 Запуск Image of the Day бота")
     
     if not all([BOT_TOKEN, CHANNEL_ID]):
-        logger.error("❌ Не все переменные окружения установлены (проверьте BOT_TOKEN и CHANNEL_ID)")
+        logger.error("❌ Не все переменные окружения установлены (проверьте TELEGRAM_BOT_TOKEN и TELEGRAM_CHANNEL_ID)")
         return False
     
     # Выбираем случайный основной источник
@@ -261,9 +288,9 @@ def main():
     elif source == 'nasa':
         content = get_national_park_image()
     
-    # ИСПРАВЛЕНИЕ 4: Улучшенная логика fallback (запасных вариантов)
+    # Улучшенная логика fallback (запасных вариантов)
     if not content:
-        logger.warning("⚠️ Не удалось получить фото из основного источника, пробуем запасные...")
+        logger.warning("️ Не удалось получить фото из основного источника, пробуем запасные...")
         fallback_sources = ['nasa', 'wikimedia', 'unsplash_nature']
         if source in fallback_sources:
             fallback_sources.remove(source)
