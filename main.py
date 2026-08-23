@@ -23,9 +23,9 @@ logger = logging.getLogger(__name__)
 translator = GoogleTranslator(source='auto', target='ru')
 
 # Переменные окружения
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-UNSPLASH_KEY = os.getenv("UNSPLASH_KEY")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 
 # Доступные источники
 SOURCES = ['unsplash_nature', 'unsplash_animals', 'unsplash_space', 'wikimedia', 'nasa']
