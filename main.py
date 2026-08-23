@@ -23,13 +23,13 @@ logger = logging.getLogger(__name__)
 # Инициализация переводчика
 translator = GoogleTranslator(source='auto', target='ru')
 
-# Переменные окружения (имена должны совпадать с Secrets в GitHub Actions)
+# Переменные окружения
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 
-# Доступные источники
-SOURCES = ['unsplash_nature', 'unsplash_animals', 'unsplash_space', 'wikimedia', 'nasa']
+# Доступные источники (только Unsplash)
+SOURCES = ['unsplash_nature', 'unsplash_animals', 'unsplash_space']
 
 # ==============================================================================
 # ФУНКЦИИ ПОЛУЧЕНИЯ ИЗОБРАЖЕНИЙ
@@ -65,88 +65,7 @@ def get_unsplash_image(query):
         caption = f"🌿 <b>Image of the Day</b>\n\n{desc_ru}\n\n📸 {photographer}\n🌐 Unsplash"
         return {'url': img_url, 'caption': caption[:1024]}
     except Exception as e:
-        logger.error(f"❌ Unsplash ({query}): {e}")
-        return None
-
-
-def get_wikimedia_featured():
-    """Получить случайное фото с Wikimedia Commons"""
-    try:
-        url = "https://commons.wikimedia.org/w/api.php"
-        params = {
-            'action': 'query',
-            'format': 'json',
-            'generator': 'random',
-            'grnnamespace': 6,  # Namespace для файлов
-            'grnlimit': 10,
-            'prop': 'imageinfo',
-            'iiprop': 'url',
-            'redirects': ''
-        }
-        
-        r = requests.get(url, params=params, headers={'User-Agent': 'ImageOfTheDayBot/1.0'}, timeout=30)
-        r.raise_for_status()
-        pages = r.json().get('query', {}).get('pages', {})
-        
-        for page_id, page in pages.items():
-            if 'imageinfo' in page:
-                img_info = page['imageinfo'][0]
-                img_url = img_info['url']
-                
-                # Проверяем, что это изображение
-                if any(ext in img_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
-                    title = page['title'].replace('File:', '').replace('_', ' ')
-                    desc = f"Избранное фото: {title}"
-                    try:
-                        desc_ru = translator.translate(desc)
-                    except Exception:
-                        desc_ru = desc
-                    
-                    caption = f"🌍 <b>Image of the Day</b>\n\n{desc_ru}\n\n🌐 Wikimedia Commons"
-                    return {'url': img_url, 'caption': caption[:1024]}
-        return None
-    except Exception as e:
-        logger.error(f"❌ Wikimedia: {e}")
-        return None
-
-
-def get_national_park_image():
-    """Получить фото из архива NASA"""
-    try:
-        url = "https://images-api.nasa.gov/search"
-        params = {
-            'q': random.choice(['earth', 'nature', 'wildlife', 'forest', 'ocean', 'mountain', 'galaxy']),
-            'media_type': 'image',
-            'page_size': 100
-        }
-        r = requests.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        
-        items = data.get('collection', {}).get('items', [])
-        if items:
-            item = random.choice(items)
-            links = item.get('links', [])
-            if not links:
-                return None
-                
-            img_url = links[0].get('href')
-            meta = item.get('data', [{}])[0]
-            title = meta.get('title', 'Nature')
-            desc = meta.get('description', '')
-            
-            if img_url:
-                try:
-                    title_ru = translator.translate(title)
-                    desc_ru = translator.translate(desc[:200]) if desc else ''
-                except Exception:
-                    title_ru, desc_ru = title, desc
-                
-                caption = f"🌎 <b>Image of the Day</b>\n\n<b>{title_ru}</b>\n\n{desc_ru}\n\n🌐 NASA"
-                return {'url': img_url, 'caption': caption[:1024]}
-        return None
-    except Exception as e:
-        logger.error(f"❌ NASA: {e}")
+        logger.error(f" Unsplash ({query}): {e}")
         return None
 
 # ==============================================================================
@@ -168,30 +87,44 @@ def send_image(content):
         bot = Bot(token=BOT_TOKEN, request=request)
         logger.info(f"📥 Скачивание изображения: {content['url'][:60]}...")
         
-        # Скачиваем изображение с проверками
-        for attempt in range(3):
-            r = requests.get(content['url'], timeout=60, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-            
-            if r.status_code == 429:
-                logger.warning("⚠️ 429 Too Many Requests. Ждем 5 секунд...")
-                time.sleep(5)
-                continue
-            
-            # Проверка, что сервер вернул именно изображение, а не HTML-страницу ошибки
-            content_type = r.headers.get('Content-Type', '').lower()
-            if not content_type.startswith('image/'):
-                logger.error(f"❌ По ссылке вернулся не изображение, а: {content_type}")
-                return False
-            
-            # Проверка размера файла (страницы ошибок обычно весят < 5 КБ)
-            if len(r.content) < 5000:
-                logger.error("❌ Размер файла слишком мал (< 5 КБ), вероятно это страница ошибки сервера")
-                return False
+        # Скачиваем изображение с проверками и увеличенным временем ожидания
+        max_download_attempts = 5
+        for attempt in range(max_download_attempts):
+            try:
+                r = requests.get(content['url'], timeout=120, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
                 
-            r.raise_for_status()
-            break
+                if r.status_code == 429:
+                    wait_time = 10 * (attempt + 1)
+                    logger.warning(f"️ 429 Too Many Requests. Ждем {wait_time} секунд...")
+                    time.sleep(wait_time)
+                    continue
+                
+                # Проверка, что сервер вернул именно изображение, а не HTML-страницу ошибки
+                content_type = r.headers.get('Content-Type', '').lower()
+                if not content_type.startswith('image/'):
+                    logger.error(f"❌ По ссылке вернулся не изображение, а: {content_type}")
+                    return False
+                
+                # Проверка размера файла (страницы ошибок обычно весят < 5 КБ)
+                if len(r.content) < 5000:
+                    logger.error("❌ Размер файла слишком мал (< 5 КБ), вероятно это страница ошибки сервера")
+                    return False
+                    
+                r.raise_for_status()
+                break
+            except requests.exceptions.Timeout:
+                logger.warning(f"⚠️ Превышено время ожидания при загрузке (попытка {attempt + 1})")
+                if attempt < max_download_attempts - 1:
+                    time.sleep(5)
+                    continue
+                else:
+                    logger.error(" Не удалось скачать изображение: таймаут")
+                    return False
+            except Exception as e:
+                logger.error(f"❌ Ошибка при загрузке: {e}")
+                return False
         else:
-            logger.error("❌ Не удалось скачать изображение после 3 попыток")
+            logger.error("❌ Не удалось скачать изображение после всех попыток")
             return False
         
         # Определяем расширение файла на основе реального Content-Type
@@ -229,7 +162,7 @@ def send_image(content):
                 logger.info("✅ Фото успешно отправлено!")
                 return True
             except Exception as e:
-                logger.warning(f"⚠️ Попытка #{send_attempt + 1} не удалась: {e}")
+                logger.warning(f"️ Попытка #{send_attempt + 1} не удалась: {e}")
                 if send_attempt < max_send_attempts - 1:
                     wait_time = 5 * (send_attempt + 1)
                     logger.info(f"⏳ Ждем {wait_time} секунд перед следующей попыткой...")
@@ -270,46 +203,40 @@ def main():
         logger.error("❌ Не все переменные окружения установлены (проверьте TELEGRAM_BOT_TOKEN и TELEGRAM_CHANNEL_ID)")
         return False
     
-    # Выбираем случайный основной источник
+    # Выбираем случайный источник (только Unsplash)
     source = random.choice(SOURCES)
-    logger.info(f"🎯 Основной источник: {source}")
+    logger.info(f"🎯 Источник: {source}")
     
     content = None
     
-    # Получаем изображение
+    # Получаем изображение из выбранного источника
     if source == 'unsplash_nature':
         content = get_unsplash_image('nature landscape beautiful')
     elif source == 'unsplash_animals':
         content = get_unsplash_image('animals wildlife birds')
     elif source == 'unsplash_space':
         content = get_unsplash_image('space planet earth astronomy')
-    elif source == 'wikimedia':
-        content = get_wikimedia_featured()
-    elif source == 'nasa':
-        content = get_national_park_image()
     
-    # Улучшенная логика fallback (запасных вариантов)
+    # Если не получилось, пробуем другие категории Unsplash
     if not content:
-        logger.warning("️ Не удалось получить фото из основного источника, пробуем запасные...")
-        fallback_sources = ['nasa', 'wikimedia', 'unsplash_nature']
-        if source in fallback_sources:
-            fallback_sources.remove(source)
+        logger.warning("⚠️ Не удалось получить фото, пробуем другие категории Unsplash...")
+        fallback_queries = [
+            'nature landscape beautiful',
+            'animals wildlife birds',
+            'space planet earth astronomy',
+            'sunset sunrise sky',
+            'mountain forest water'
+        ]
         
-        for fallback in fallback_sources:
-            logger.info(f"🔄 Пробуем запасной источник: {fallback}")
-            if fallback == 'nasa':
-                content = get_national_park_image()
-            elif fallback == 'wikimedia':
-                content = get_wikimedia_featured()
-            elif fallback == 'unsplash_nature':
-                content = get_unsplash_image('nature landscape')
-            
+        for query in fallback_queries:
+            logger.info(f" Пробуем запрос: {query}")
+            content = get_unsplash_image(query)
             if content:
-                logger.info(f"✅ Успешно получено из запасного источника: {fallback}")
+                logger.info(f"✅ Успешно получено по запросу: {query}")
                 break
     
     if not content:
-        logger.error("❌ Не удалось получить изображение ни из одного источника")
+        logger.error("❌ Не удалось получить изображение из Unsplash")
         return False
     
     # Отправляем в Telegram
