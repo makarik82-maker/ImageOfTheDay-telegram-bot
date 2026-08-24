@@ -7,7 +7,6 @@ import asyncio
 import time
 from datetime import datetime
 import requests
-from deep_translator import GoogleTranslator
 from telegram import Bot
 from telegram.request import HTTPXRequest
 
@@ -20,16 +19,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация переводчика
-translator = GoogleTranslator(source='auto', target='ru')
-
 # Переменные окружения
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 
-# Доступные источники (только Unsplash)
-SOURCES = ['unsplash_nature', 'unsplash_animals', 'unsplash_space']
+# Все доступные категории Unsplash (циклически меняются)
+CATEGORIES = [
+    'nature landscape beautiful',
+    'animals wildlife birds',
+    'space planet earth astronomy',
+    'sunset sunrise sky',
+    'mountain forest water',
+    'ocean sea beach',
+    'flowers garden spring',
+    'winter snow ice',
+    'autumn fall leaves',
+    'city urban architecture',
+    'food cooking delicious',
+    'travel adventure journey'
+]
 
 # ==============================================================================
 # ФУНКЦИИ ПОЛУЧЕНИЯ ИЗОБРАЖЕНИЙ
@@ -55,17 +64,12 @@ def get_unsplash_image(query):
         # Фильтрация мусорных описаний и текстов ошибок сервера
         error_keywords = ['error', '500', "that's an error", 'server error', '!!']
         if not desc or any(keyword in desc.lower() for keyword in error_keywords):
-            desc_ru = f"Красивое фото: {query}"
-        else:
-            try:
-                desc_ru = translator.translate(desc)
-            except Exception:
-                desc_ru = desc
+            desc = f"Beautiful photo: {query}"
         
-        caption = f"🌿 <b>Image of the Day</b>\n\n{desc_ru}\n\n📸 {photographer}\n🌐 Unsplash"
+        caption = f"🌿 <b>Image of the Day</b>\n\n{desc}\n\n📸 {photographer}\n🌐 Unsplash"
         return {'url': img_url, 'caption': caption[:1024]}
     except Exception as e:
-        logger.error(f" Unsplash ({query}): {e}")
+        logger.error(f"❌ Unsplash ({query}): {e}")
         return None
 
 # ==============================================================================
@@ -95,7 +99,7 @@ def send_image(content):
                 
                 if r.status_code == 429:
                     wait_time = 10 * (attempt + 1)
-                    logger.warning(f"️ 429 Too Many Requests. Ждем {wait_time} секунд...")
+                    logger.warning(f"⚠️ 429 Too Many Requests. Ждем {wait_time} секунд...")
                     time.sleep(wait_time)
                     continue
                 
@@ -147,7 +151,7 @@ def send_image(content):
         max_send_attempts = 3
         for send_attempt in range(max_send_attempts):
             try:
-                logger.info(f"🔄 Попытка отправки #{send_attempt + 1}...")
+                logger.info(f" Попытка отправки #{send_attempt + 1}...")
                 with open(path, 'rb') as photo:
                     asyncio.run(bot.send_photo(
                         chat_id=CHANNEL_ID,
@@ -162,7 +166,7 @@ def send_image(content):
                 logger.info("✅ Фото успешно отправлено!")
                 return True
             except Exception as e:
-                logger.warning(f"️ Попытка #{send_attempt + 1} не удалась: {e}")
+                logger.warning(f"⚠️ Попытка #{send_attempt + 1} не удалась: {e}")
                 if send_attempt < max_send_attempts - 1:
                     wait_time = 5 * (send_attempt + 1)
                     logger.info(f"⏳ Ждем {wait_time} секунд перед следующей попыткой...")
@@ -185,15 +189,27 @@ def send_image(content):
 # ==============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И MAIN
 # ==============================================================================
-def set_github_variable(name, value):
-    """Обновление переменной для GitHub Actions (если запускается там)"""
+def get_last_category_index():
+    """Получить индекс последней использованной категории"""
+    github_env = os.getenv('GITHUB_ENV')
+    if github_env and os.path.exists(github_env):
+        try:
+            with open(github_env, 'r') as f:
+                for line in f:
+                    if line.startswith('LAST_CATEGORY_INDEX='):
+                        return int(line.strip().split('=')[1])
+        except Exception:
+            pass
+    return -1  # Если не найдено, начинаем с первой категории
+
+
+def save_category_index(index):
+    """Сохранить индекс текущей категории"""
     github_env = os.getenv('GITHUB_ENV')
     if github_env:
         with open(github_env, 'a') as f:
-            f.write(f"{name}={value}\n")
-        logger.info(f"✅ Переменная {name} обновлена в GitHub Actions")
-    else:
-        logger.info(f"ℹ️ Локальный режим: переменная {name}={value}")
+            f.write(f"LAST_CATEGORY_INDEX={index}\n")
+        logger.info(f"✅ Сохранен индекс категории: {index}")
 
 
 def main():
@@ -203,46 +219,50 @@ def main():
         logger.error("❌ Не все переменные окружения установлены (проверьте TELEGRAM_BOT_TOKEN и TELEGRAM_CHANNEL_ID)")
         return False
     
-    # Выбираем случайный источник (только Unsplash)
-    source = random.choice(SOURCES)
-    logger.info(f"🎯 Источник: {source}")
+    # Получаем индекс последней использованной категории и выбираем следующую
+    last_index = get_last_category_index()
+    current_index = (last_index + 1) % len(CATEGORIES)
+    current_category = CATEGORIES[current_index]
+    
+    logger.info(f"🎯 Категория #{current_index + 1}/{len(CATEGORIES)}: {current_category}")
+    logger.info(f"📊 Последняя категория была #{last_index + 1}")
     
     content = None
     
-    # Получаем изображение из выбранного источника
-    if source == 'unsplash_nature':
-        content = get_unsplash_image('nature landscape beautiful')
-    elif source == 'unsplash_animals':
-        content = get_unsplash_image('animals wildlife birds')
-    elif source == 'unsplash_space':
-        content = get_unsplash_image('space planet earth astronomy')
+    # Пробуем получить изображение из текущей категории
+    content = get_unsplash_image(current_category)
     
-    # Если не получилось, пробуем другие категории Unsplash
+    # Если не получилось, пробуем следующие категории по порядку
     if not content:
-        logger.warning("⚠️ Не удалось получить фото, пробуем другие категории Unsplash...")
-        fallback_queries = [
-            'nature landscape beautiful',
-            'animals wildlife birds',
-            'space planet earth astronomy',
-            'sunset sunrise sky',
-            'mountain forest water'
-        ]
+        logger.warning("⚠️ Не удалось получить фото, пробуем следующие категории...")
         
-        for query in fallback_queries:
-            logger.info(f" Пробуем запрос: {query}")
-            content = get_unsplash_image(query)
+        # Пробуем все остальные категории по кругу
+        for i in range(1, len(CATEGORIES)):
+            next_index = (current_index + i) % len(CATEGORIES)
+            next_category = CATEGORIES[next_index]
+            
+            logger.info(f"🔄 Пробуем категорию #{next_index + 1}: {next_category}")
+            content = get_unsplash_image(next_category)
+            
             if content:
-                logger.info(f"✅ Успешно получено по запросу: {query}")
+                logger.info(f"✅ Успешно получено из категории #{next_index + 1}")
+                current_index = next_index
                 break
     
     if not content:
-        logger.error("❌ Не удалось получить изображение из Unsplash")
+        logger.error("❌ Не удалось получить изображение ни из одной категории")
         return False
     
     # Отправляем в Telegram
     if send_image(content):
         today = datetime.now().strftime('%Y-%m-%d')
-        set_github_variable("LAST_IMAGE_DATE", today)
+        save_category_index(current_index)
+        
+        # Также сохраняем дату для отслеживания
+        with open(os.getenv('GITHUB_ENV', '/dev/null'), 'a') as f:
+            f.write(f"LAST_IMAGE_DATE={today}\n")
+        
+        logger.info(f" Дата публикации: {today}")
         return True
     
     return False
